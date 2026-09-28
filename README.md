@@ -1,12 +1,16 @@
-# TekMRKTG — Isabella AI Guest Service & Voice Routing Engine
+# TekMRKTG (Isabella AI) — Voice Operations & HITL Routing Engine
 
 ## Overview
-Engineered the database architecture, call-routing engine, and Human-in-the-Loop (HITL) escalation logic for **Isabella AI**, an automated guest service assistant designed to capture missed restaurant revenue from phone inquiries.
+Engineered a PostgreSQL database architecture, custom procedural trigger functions, and Row Level Security (RLS) policies in Supabase for **Isabella AI**, an automated voice routing and reservation management engine designed for high-volume, phone-only restaurant operations[cite: 1, 2, 4, 5].
 
-## Key Features & Architecture
-* **Relational Schema (`restaurant_clients`, `call_logs`, `hitl_escalations`)**: Normalizes client configurations, tier limits, call metadata, and manual staff escalation queues.
-* **Human-in-the-Loop (HITL) Guardrails**: Automatically detects operational edge cases (party sizes > 6, severe dietary allergies, catering requests) and flags them for manager review[cite: 1, 2].
-* **Performance & ROI Analytics**: Evaluates 24/7 call capture logs to measure guest conversion, speed-to-value SLAs (72-hour deployment guarantee)[cite: 1, 5], and 2x ROI metrics[cite: 1, 5].
+## Key Features & System Logic
+* **Automated Call Classification**: Categorizes incoming customer inquiries into reservations, modifications, and private dining requests[cite: 4, 5].
+* **Human-in-the-Loop (HITL) Guardrails**: Implemented PL/pgSQL trigger logic (`process_isabella_routing()`) that automatically intercepts high-risk edge cases (party sizes > 6, severe dietary allergies, catering requests) and routes them to a human escalation queue[cite: 1, 2, 4, 5].
+* **Prospect Classification Engine**: Tracks high-ticket hospitality leads (Green, Yellow, Red zones) alongside custom client onboarding metrics[cite: 3].
+* **Row Level Security (RLS)**: Enforces access control policies securing client contact info and call log privacy.
 
-## Core Query Logic
-Pipes incoming voice call payloads through PostgreSQL `CASE` conditional logic to trigger real-time `AUTO_CONFIRM` vs `ESCALATE` routing decisions.
+## Data Privacy & Compliance
+* **Data Sanitization**: Business entities reflect real-world operational targets; all phone numbers, contact details, and personal identifiers have been sanitized with synthetic mock data (`+1-555-555-01XX`) to ensure strict PII protection.
+
+## Repository Structure
+* `schema.sql` — PostgreSQL DDL scripts, procedural triggers, RLS policies, and prospecting sample data[cite: 3, 5].
