@@ -1,40 +1,107 @@
 -- ============================================================================
--- TEKMRKTG (ISABELLA AI) DATABASE SCHEMA & CALL ROUTING ENGINE
+-- TEKMRKTG (ISABELLA AI) ENGINE & PROSPECT PIPELINE
 -- Engine: PostgreSQL (Supabase)
 -- Author: TekMRKTG Engineering
--- Description: Core schema for client onboarding, incoming call logs, AI reservation 
---              intake, and Human-in-the-Loop (HITL) escalation routing.
+-- Description: Client intake, phone call routing, HITL escalation triggers, 
+--              and high-intent prospect tracking for Arizona fine dining.
 -- ============================================================================
 
--- ----------------------------------------------------------------------------
--- 1. SCHEMA INITIALIZATION & TABLES
--- ----------------------------------------------------------------------------
-
--- Table 1: Restaurant Clients
+-- 1. CREATE CORE TABLES
 CREATE TABLE IF NOT EXISTS restaurant_clients (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     restaurant_name VARCHAR(100) NOT NULL,
-    plan_tier VARCHAR(20) DEFAULT 'Pro Plan', -- 'Pro Plan' ($397/mo) or 'Partner Plan' ($4,367/yr)
-    tier_category VARCHAR(20) DEFAULT 'Tier 1', -- Tier 1 (Fine Dining/Steakhouse), Tier 2, Tier 3
+    plan_tier VARCHAR(30) DEFAULT 'Pro Plan',     -- 'Pro Plan' ($297-$397/mo) or 'Partner Plan'
     phone_number VARCHAR(20) NOT NULL,
-    max_party_auto_book INT DEFAULT 6,         -- Parties > 6 trigger HITL escalation
-    status VARCHAR(20) DEFAULT 'Active'
+    max_party_auto_book INT DEFAULT 6,             -- Parties > 6 trigger HITL escalation
+    status VARCHAR(20) DEFAULT 'Prospect',          -- 'Prospect', 'Active', 'Onboarding'
+    prospect_zone VARCHAR(10) CHECK (prospect_zone IN ('Green', 'Yellow', 'Red')),
+    location_city VARCHAR(50) DEFAULT 'Phoenix',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Table 2: Call Inquiries & AI Voice Logs
 CREATE TABLE IF NOT EXISTS call_logs (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
     client_id BIGINT REFERENCES restaurant_clients(id) ON DELETE CASCADE,
     caller_phone VARCHAR(20) NOT NULL,
-    call_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    intent VARCHAR(50) NOT NULL,              -- 'Reservation', 'Menu Inquiry', 'Special Request', 'Catering'
-    party_size INT,
-    requested_date TIMESTAMP,
+    call_timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    intent VARCHAR(50) NOT NULL,                  -- 'Reservation', 'Modification', 'Catering'
+    party_size INT DEFAULT 2,
+    requested_date TIMESTAMP WITH TIME ZONE,
     has_allergies BOOLEAN DEFAULT FALSE,
     special_notes TEXT,
-    ai_resolution_status VARCHAR(30) NOT NULL -- 'AUTO_BOOKED', 'ANSWERED_INQUIRY', 'ESCALATED_HITL'
+    ai_resolution_status VARCHAR(30) DEFAULT 'PENDING' -- 'AUTO_BOOKED', 'ANSWERED_INQUIRY', 'ESCALATED_HITL'
 );
 
+CREATE TABLE IF NOT EXISTS hitl_escalations (
+    id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
+    call_id BIGINT REFERENCES call_logs(id) ON DELETE CASCADE,
+    escalation_reason VARCHAR(100) NOT NULL,       -- 'Party Size Exceeds Limit', 'Severe Allergy'
+    assigned_staff_user VARCHAR(50),
+    status VARCHAR(20) DEFAULT 'PENDING',           -- 'PENDING', 'APPROVED', 'REJECTED'
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 2. AUTOMATED PL/pgSQL HITL ESCALATION TRIGGER (AFTER INSERT)
+CREATE OR REPLACE FUNCTION process_isabella_routing()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.party_size > 6 OR NEW.has_allergies = TRUE OR NEW.intent = 'Catering' THEN
+        -- Update the call log resolution status
+        UPDATE call_logs 
+        SET ai_resolution_status = 'ESCALATED_HITL' 
+        WHERE id = NEW.id;
+        
+        -- Insert record into human escalation queue
+        INSERT INTO hitl_escalations (call_id, escalation_reason, status)
+        VALUES (
+            NEW.id, 
+            CASE 
+                WHEN NEW.party_size > 6 THEN 'Party size exceeds auto-booking threshold'
+                WHEN NEW.has_allergies = TRUE THEN 'Dietary/Allergy accommodation required'
+                ELSE 'Catering / Private Dining Request'
+            END,
+            'PENDING'
+        );
+    ELSE
+        UPDATE call_logs 
+        SET ai_resolution_status = 'AUTO_BOOKED' 
+        WHERE id = NEW.id;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_isabella_call_routing
+AFTER INSERT ON call_logs
+FOR EACH ROW
+EXECUTE FUNCTION process_isabella_routing();
+
+-- 3. ENABLE ROW LEVEL SECURITY (RLS)
+ALTER TABLE restaurant_clients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE call_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE hitl_escalations ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Public read client info" ON restaurant_clients FOR SELECT USING (true);
+CREATE POLICY "Public read call logs" ON call_logs FOR SELECT USING (true);
+CREATE POLICY "Public read escalations" ON hitl_escalations FOR SELECT USING (true);
+
+-- 4. SEED DATA: ARIZONA HIGH-INTENT PROSPECTS (SANITIZED MOCK NUMBERS)
+INSERT INTO restaurant_clients (restaurant_name, plan_tier, phone_number, max_party_auto_book, status, prospect_zone, location_city) 
+VALUES 
+    ('The Stockyards Restaurant', 'Pro Plan', '+1-602-555-0101', 6, 'Prospect', 'Green', 'Phoenix'),
+    ('Cowboy Club Grille & Spirits', 'Pro Plan', '+1-928-555-0102', 8, 'Prospect', 'Green', 'Sedona'),
+    ('Different Pointe of View', 'Partner Plan', '+1-602-555-0103', 6, 'Prospect', 'Green', 'Phoenix'),
+    ('Lon''s at The Hermosa Inn', 'Partner Plan', '+1-602-555-0104', 6, 'Prospect', 'Green', 'Paradise Valley'),
+    ('Mariposa Sedona', 'Pro Plan', '+1-928-555-0105', 6, 'Prospect', 'Green', 'Sedona'),
+    ('Village Chop House', 'Pro Plan', '+1-928-555-0106', 6, 'Prospect', 'Green', 'Sedona');
+
+-- 5. TEST CALL LOGS (AUTOMATICALLY TRIGGERS HITL ESCALATIONS)
+INSERT INTO call_logs (client_id, caller_phone, intent, party_size, has_allergies, special_notes)
+VALUES 
+    (1, '+1-480-555-0199', 'Reservation', 4, FALSE, 'Standard booth requested'),
+    (1, '+1-480-555-0188', 'Reservation', 12, FALSE, 'Large corporate gathering'),
+    (2, '+1-928-555-0177', 'Reservation', 2, TRUE, 'Celiac / severe gluten allergy');
 -- Table 3: HITL Escalation Queue (For Human Staff Action)
 CREATE TABLE IF NOT EXISTS hitl_escalations (
     id BIGINT PRIMARY KEY GENERATED ALWAYS AS IDENTITY,
